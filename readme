@@ -1,0 +1,232 @@
+  METHOD post_document.
+
+*Local variable declarations
+    DATA: ls_header   TYPE bapiache09,
+          lt_return   TYPE STANDARD TABLE OF bapiret2,
+          lv_obj_type TYPE bapiache09-obj_type,
+          lv_obj_key  TYPE bapiache09-obj_key,
+          ls_ext      TYPE bapiparex,
+          lt_ext      TYPE STANDARD TABLE OF bapiparex,
+          lv_obj_sys  TYPE bapiache09-obj_sys,
+          lt_item     TYPE /kgo/fi_tt_mf_brfl,
+          ls_head     TYPE /kgo/fi_mf_brfh,
+          ls_msg      TYPE bal_s_msg,
+          lv_message  TYPE string,
+          lv_msg      TYPE string.
+    CONSTANTS:lc_sep           TYPE char1  VALUE cl_abap_char_utilities=>newline.
+    TRY."+Added for incident INC01232619 on 02.09.2020
+        IF im_item[] IS INITIAL.
+          SELECT * FROM /kgo/fi_mf_brfl INTO TABLE @DATA(lt_item1)"lt_item
+            WHERE company_code = @im_head-company_code
+            AND brf_no = @im_head-brf_no
+            AND requesting_mf = @im_mf
+            AND global_cc = @im_cc
+            AND process_grp = @im_pgrp
+            AND   member_firm = @im_memberfirm
+            AND   cc_short_desc = @im_cc_short_desc ORDER BY PRIMARY KEY.
+          IF sy-subrc = 0.
+            MOVE-CORRESPONDING lt_item1 TO lt_item.
+            SELECT SINGLE * FROM /kgo/fi_mf_brfh INTO ls_head
+              WHERE company_code = im_head-company_code
+              AND brf_no = im_head-brf_no.
+          ENDIF.
+        ELSE.
+          SELECT SINGLE * FROM /kgo/fi_mf_brfh INTO ls_head
+              WHERE company_code = im_head-company_code
+              AND brf_no = im_head-brf_no.
+*      ls_head = im_head.
+          lt_item[] = im_item[].
+        ENDIF.
+
+        LOOP AT lt_item ASSIGNING FIELD-SYMBOL(<ls_item>).
+          IF <ls_item>-sap_code_mf IS NOT INITIAL.
+            CALL FUNCTION 'CONVERSION_EXIT_ALPHA_INPUT'
+              EXPORTING
+                input  = <ls_item>-sap_code_mf
+              IMPORTING
+                output = <ls_item>-sap_code_mf.
+          ENDIF.
+          IF <ls_item>-cc_code1 IS NOT INITIAL.
+            CALL FUNCTION 'CONVERSION_EXIT_ALPHA_INPUT'
+              EXPORTING
+                input  = <ls_item>-cc_code1
+              IMPORTING
+                output = <ls_item>-cc_code1.
+          ENDIF.
+          IF <ls_item>-cc_code2 IS NOT INITIAL.
+            CALL FUNCTION 'CONVERSION_EXIT_ALPHA_INPUT'
+              EXPORTING
+                input  = <ls_item>-cc_code2
+              IMPORTING
+                output = <ls_item>-cc_code2.
+          ENDIF.
+          IF <ls_item>-debit_gl IS NOT INITIAL.
+            CALL FUNCTION 'CONVERSION_EXIT_ALPHA_INPUT'
+              EXPORTING
+                input  = <ls_item>-debit_gl
+              IMPORTING
+                output = <ls_item>-debit_gl.
+          ENDIF.
+          IF <ls_item>-credit_gl IS NOT INITIAL.
+            CALL FUNCTION 'CONVERSION_EXIT_ALPHA_INPUT'
+              EXPORTING
+                input  = <ls_item>-credit_gl
+              IMPORTING
+                output = <ls_item>-credit_gl.
+          ENDIF.
+
+          IF <ls_item>-profit_center IS NOT INITIAL.
+            CALL FUNCTION 'CONVERSION_EXIT_ALPHA_INPUT'
+              EXPORTING
+                input  = <ls_item>-profit_center
+              IMPORTING
+                output = <ls_item>-profit_center.
+          ENDIF.
+
+          IF <ls_item>-profit_center_debit IS NOT INITIAL.
+            CALL FUNCTION 'CONVERSION_EXIT_ALPHA_INPUT'
+              EXPORTING
+                input  = <ls_item>-profit_center_debit
+              IMPORTING
+                output = <ls_item>-profit_center_debit.
+          ENDIF.
+        ENDLOOP.
+
+        "Get data for validation
+        validate_data_for_posting(
+          EXPORTING
+            im_head = ls_head
+            im_item = lt_item
+          IMPORTING
+            ex_ret  = DATA(ls_ret) ).
+
+        IF ls_ret IS INITIAL.
+          "Post the document
+          MOVE gs_header TO ls_header.
+          CLEAR:  ls_header-obj_type,
+                  ls_header-obj_key,
+                  ls_header-obj_sys.
+          "Selecting company VAT code
+          SELECT SINGLE stceg INTO @DATA(lv_vat) FROM t001 WHERE bukrs = @im_head-company_code.
+          READ TABLE lt_item INTO DATA(ls_item) INDEX 1.
+          ls_ext-structure = 'ACCIT'.
+          "+Begin of addition for New company code 9921 changes on 15.09.2020
+*          IF im_head-company_code = '9901'.
+            "+End of addition for New company code 9921 changes on 15.09.2020
+            ls_ext-valuepart1 = 'AR_RECHARGE' && '|' && ls_item-global_cc && '|' && ls_head-rrf_no && '|' && lv_vat && '|' && 'NMT' && '|' && ls_item-adl_description.
+            "+Begin of addition for New company code 9921 changes on 15.09.2020
+*          ELSE.
+*            DATA(ls_mf) = ls_item-requesting_mf && '_' && ls_item-process_grp.
+*            ls_ext-valuepart1 = 'AR_RECHARGE' && '|' && ls_item-global_cc && '|' && ls_head-rrf_no && '|' && lv_vat && '|' && 'NMT' && '|' && ls_item-adl_description.
+*          ENDIF.
+          "+End of addition for New company code 9921 changes on 15.09.2020
+          APPEND ls_ext TO lt_ext.
+
+          CALL FUNCTION 'BAPI_ACC_DOCUMENT_CHECK'
+            EXPORTING
+              documentheader = ls_header
+            TABLES
+              accountgl      = gt_acc
+              currencyamount = gt_curr
+              extension2     = lt_ext
+              return         = lt_return.
+
+          IF lt_return IS NOT INITIAL.
+            READ TABLE lt_item INTO ls_item INDEX 1.
+            IF sy-subrc = 0.
+              READ TABLE lt_return INTO DATA(ls_return) WITH KEY type  = 'E'.
+              IF sy-subrc <> 0.
+
+                REFRESH lt_return.
+                CALL FUNCTION 'BAPI_ACC_DOCUMENT_POST'
+                  EXPORTING
+                    documentheader = ls_header
+                  IMPORTING
+                    obj_type       = lv_obj_type
+                    obj_key        = lv_obj_key
+                    obj_sys        = lv_obj_sys
+                  TABLES
+                    accountgl      = gt_acc
+                    currencyamount = gt_curr
+                    extension2     = lt_ext
+                    return         = lt_return.
+                IF lt_return IS NOT INITIAL.
+                  READ TABLE lt_return INTO ls_return WITH KEY type  = 'S'.
+                  IF sy-subrc = 0.
+                    CALL FUNCTION 'BAPI_TRANSACTION_COMMIT'
+                      EXPORTING
+                        wait = abap_true.
+                    ex_ret = ls_return.
+                    ex_doc_no = lv_obj_key.
+                    ex_refdoc = ls_header-ref_doc_no.
+                    ex_hdtxt = ls_header-header_txt.
+
+                    CONCATENATE 'Document' ex_doc_no 'was posted successfully for BRF No:' ls_item-brf_no 'Global CC' ls_item-global_cc
+                       INTO ex_ret-message SEPARATED BY space.
+                    lv_message = ex_ret-message.
+                    CALL FUNCTION '/KGO/AR_FI_ADD_SLG_LOG'
+                      EXPORTING
+                        msg_type   = ex_ret-type
+                        header_msg = lv_message
+                        subobject  = 'POST_DOC_SUCCESS'.
+                  ELSE.
+
+                    DATA(lv_count) = 1.
+                    CONCATENATE 'Error in posting document for BRF No:' ls_item-brf_no 'and Global CC' ls_item-global_cc 'for the following reasons:'
+                    INTO ex_ret-message SEPARATED BY space.
+                    lv_message = ex_ret-message.
+                    LOOP AT lt_return INTO ls_return WHERE type = 'E'.
+                      IF lv_count = 1.
+                        CALL FUNCTION 'BAPI_TRANSACTION_ROLLBACK'.
+                      ENDIF.
+                      ex_ret = ls_return.
+                      lv_count = lv_count + 1.
+                      CLEAR: ls_return.
+                    ENDLOOP.
+                    CLEAR:lv_count.
+
+                    CALL FUNCTION '/KGO/AR_FI_ADD_SLG_LOG'
+                      EXPORTING
+                        msg_type   = 'E'
+                        messages   = lt_return
+                        header_msg = lv_message
+                        subobject  = 'POST_DOC_FAIL'.
+
+
+                  ENDIF.
+                ENDIF.
+              ELSE.
+*                ex_ret = ls_return.
+                LOOP AT lt_return INTO ls_return WHERE type = 'E'.
+                  IF ex_ret IS INITIAL.
+                    ex_ret = ls_return.
+                  ELSE.
+                    CONCATENATE ex_ret-message lc_sep ls_return-message INTO ex_ret-message.
+                  ENDIF.
+                  CLEAR: ls_return.
+                ENDLOOP.
+
+                CONCATENATE 'Error in posting document for BRF No:' ls_item-brf_no 'and GlobalCC:' ls_item-global_cc
+                'for the below reasons:' INTO lv_message SEPARATED BY space.
+
+                CALL FUNCTION '/KGO/AR_FI_ADD_SLG_LOG'
+                  EXPORTING
+                    msg_type   = 'E'
+                    messages   = lt_return
+                    header_msg = lv_message
+                    subobject  = 'POST_DOC_FAIL'.
+
+              ENDIF.
+            ENDIF.
+          ENDIF.
+        ELSE.
+          ex_ret = ls_ret.
+        ENDIF.
+        "+Begin of addition for  INC01232619 on 02.09.2020
+      CATCH cx_root.
+        CONCATENATE 'Error in posting document for BRF No:' ls_item-brf_no 'and GlobalCC:' ls_item-global_cc
+                'for the below reasons:' INTO ex_ret-message SEPARATED BY space.
+        ex_ret-type = 'E'.
+    ENDTRY.
+    "+End of addition for  INC01232619 on 02.09.2020
+  ENDMETHOD.
